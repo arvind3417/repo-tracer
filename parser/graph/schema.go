@@ -2,23 +2,104 @@ package graph
 
 // Node types for the code knowledge graph.
 const (
-	NodeTypeRepo      = "Repo"
-	NodeTypeFile      = "File"
-	NodeTypePackage   = "Package"
-	NodeTypeFunction  = "Function"
-	NodeTypeMethod    = "Method"
-	NodeTypeStruct    = "Struct"
-	NodeTypeInterface = "Interface"
+	NodeTypeRepo         = "Repo"
+	NodeTypeFile         = "File"
+	NodeTypePackage      = "Package"
+	NodeTypeFunction     = "Function"
+	NodeTypeMethod       = "Method"
+	NodeTypeStruct       = "Struct"
+	NodeTypeInterface    = "Interface"
+	NodeTypeKafkaTopic   = "KafkaTopic"
+	NodeTypeGRPCService  = "GRPCService"
 )
 
 // Edge relationship types.
 const (
-	EdgeImports   = "IMPORTS"
-	EdgeCalls     = "CALLS"
+	EdgeImports    = "IMPORTS"
+	EdgeCalls      = "CALLS"
 	EdgeImplements = "IMPLEMENTS"
-	EdgeDefinedIn = "DEFINED_IN"
-	EdgeBelongsTo = "BELONGS_TO"
+	EdgeDefinedIn  = "DEFINED_IN"
+	EdgeBelongsTo  = "BELONGS_TO"
+
+	// Cross-repo edge types.
+	EdgeDependsOn     = "DEPENDS_ON"      // Repo -> Repo (from go.mod)
+	EdgeCallsService  = "CALLS_SERVICE"   // Function -> GRPCService
+	EdgeProducesEvent = "PRODUCES_EVENT"  // Function -> KafkaTopic
+	EdgeConsumesEvent = "CONSUMES_EVENT"  // KafkaTopic -> Function
 )
+
+// KafkaTopic holds data for a Kafka topic node.
+type KafkaTopic struct {
+	Name      string
+	Workspace string
+}
+
+func (k KafkaTopic) ToNode() Node {
+	return Node{
+		Label: NodeTypeKafkaTopic,
+		Properties: map[string]interface{}{
+			"name":      k.Name,
+			"workspace": k.Workspace,
+		},
+	}
+}
+
+// GRPCService holds data for a gRPC service node.
+type GRPCService struct {
+	Name      string
+	ProtoFile string
+	Workspace string
+}
+
+func (g GRPCService) ToNode() Node {
+	return Node{
+		Label: NodeTypeGRPCService,
+		Properties: map[string]interface{}{
+			"name":       g.Name,
+			"proto_file": g.ProtoFile,
+			"workspace":  g.Workspace,
+		},
+	}
+}
+
+// CrossRepoEdge carries confidence metadata for cross-repository relationships.
+type CrossRepoEdge struct {
+	From       string // node ID / identifying value
+	To         string // node ID / identifying value
+	Type       string // edge type constant
+	Confidence string // "high" or "medium"
+	Workspace  string
+
+	// Label and key fields used when writing to FalkorDB.
+	FromLabel string
+	FromKey   string
+	ToLabel   string
+	ToKey     string
+
+	// Optional extra properties.
+	Properties map[string]interface{}
+}
+
+// ToEdge converts a CrossRepoEdge into a generic Edge for batch writing.
+func (c CrossRepoEdge) ToEdge() Edge {
+	props := map[string]interface{}{
+		"confidence": c.Confidence,
+		"workspace":  c.Workspace,
+	}
+	for k, v := range c.Properties {
+		props[k] = v
+	}
+	return Edge{
+		FromLabel:  c.FromLabel,
+		FromKey:    c.FromKey,
+		FromValue:  c.From,
+		ToLabel:    c.ToLabel,
+		ToKey:      c.ToKey,
+		ToValue:    c.To,
+		Relation:   c.Type,
+		Properties: props,
+	}
+}
 
 // Node represents a graph node with a label and properties.
 type Node struct {
