@@ -1,4 +1,4 @@
-.PHONY: parse docker-up docker-down test build
+.PHONY: parse parse-workspace docker-up docker-down test build
 
 docker-up:
 	docker compose up -d
@@ -11,6 +11,9 @@ build:
 
 parse:
 	go run ./parser/cmd parse $(REPO)
+
+parse-workspace:
+	go run ./parser/cmd parse $(REPOS) --workspace $(WORKSPACE)
 
 test:
 	go test ./...
