@@ -1,16 +1,19 @@
-.PHONY: parse docker-up docker-down test build
+.PHONY: dev-api dev-ui mock-trace install-api install-ui build-ui
 
-docker-up:
-	docker compose up -d
+install-api:
+	pip install -r api/requirements.txt
 
-docker-down:
-	docker compose down
+install-ui:
+	cd ui && npm install
 
-build:
-	go build ./...
+build-ui:
+	cd ui && npm run build
 
-parse:
-	go run ./parser/cmd parse $(REPO)
+dev-api:
+	uvicorn api.main:app --reload --port 8000
 
-test:
-	go test ./...
+dev-ui:
+	cd ui && npm run dev
+
+mock-trace:
+	curl -s -X POST http://localhost:8000/api/traces/mock | python3 -m json.tool
