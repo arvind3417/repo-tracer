@@ -1,6 +1,14 @@
 version: "3.9"
 
 services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"   # Redis-compatible port
+      - "3000:3000"   # Built-in browser UI
+    volumes:
+      - falkordb_data:/data
+
   api:
     build:
       context: .
@@ -11,6 +19,10 @@ services:
       - ./traces:/app/traces
     environment:
       - TRACES_DIR=/app/traces
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+    depends_on:
+      - falkordb
 
   ui:
     build:
@@ -20,3 +32,6 @@ services:
       - "5173:5173"
     depends_on:
       - api
+
+volumes:
+  falkordb_data:
