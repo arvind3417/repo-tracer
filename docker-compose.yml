@@ -3,10 +3,38 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     ports:
-      - "6379:6379"   # Redis-compatible port
-      - "3000:3000"   # Built-in browser UI
+      - "6379:6379"
+      - "3000:3000"
     volumes:
       - falkordb_data:/data
 
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - PHOENIX_WORKING_DIR=/phoenix
+    volumes:
+      - phoenix_data:/phoenix
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./traces:/app/traces
+    environment:
+      - TRACES_DIR=/app/traces
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+    depends_on:
+      - falkordb
+      - phoenix
+
 volumes:
   falkordb_data:
+  phoenix_data:
