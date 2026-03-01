@@ -44,3 +44,13 @@ dev-full:
 	docker compose up -d falkordb phoenix
 	uvicorn api.main:app --reload --port 8000 &
 	cd ui && npm run dev
+
+# --- Phase 5: advanced feature shortcuts ---
+search:
+	curl -s "http://localhost:8000/api/search?q=$(Q)" | python3 -m json.tool
+
+stats:
+	curl -s "http://localhost:8000/api/stats" | python3 -m json.tool
+
+diff:
+	curl -s "http://localhost:8000/api/diff?session_a=$(A)&session_b=$(B)&workspace=$(W)" | python3 -m json.tool

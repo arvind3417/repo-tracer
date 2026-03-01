@@ -87,3 +87,49 @@ export interface WorkspaceSummary {
   repo_count: number;
   node_count: number;
 }
+
+// --- Phase 5 types ---
+
+export interface DiffResponse {
+  session_a: string;
+  session_b: string;
+  shared_nodes: string[];
+  only_in_a: string[];
+  only_in_b: string[];
+  divergence_step: number | null;
+  divergence_node_a: string | null;
+  divergence_node_b: string | null;
+  steps_a: TraceStep[];
+  steps_b: TraceStep[];
+  summary: string;
+}
+
+export interface SearchResult {
+  session_id: string;
+  query: string;
+  repo: string;
+  started_at: string;
+  matching_step: number | null;
+  matching_field: string | null;
+  match_excerpt: string | null;
+}
+
+export interface FileVisit {
+  file: string;
+  visit_count: number;
+}
+
+export interface FunctionVisit {
+  name: string;
+  visit_count: number;
+}
+
+export interface StatsResponse {
+  total_sessions: number;
+  avg_steps_to_answer: number;
+  most_visited_files: FileVisit[];
+  most_visited_functions: FunctionVisit[];
+  tool_usage: Record<string, number>;
+  root_causes_found: number;
+  repos_explored: string[];
+}
