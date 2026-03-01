@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+.venv
+venv/
+
+# Traces (keep directory, ignore JSON files)
+traces/*.json
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
