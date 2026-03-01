@@ -8,6 +8,11 @@ interface GraphCanvasProps {
   subgraph: SubgraphResult | null;
   activeStep?: number;
   onNodeClick?: (nodeId: string, step: number) => void;
+  // Diff mode props
+  diffMode?: boolean;
+  diffSharedSet?: Set<string> | null;
+  diffOnlyASet?: Set<string> | null;
+  diffOnlyBSet?: Set<string> | null;
 }
 
 // Colour palette keyed by node type
@@ -130,6 +135,10 @@ export function GraphCanvas({
   subgraph,
   activeStep,
   onNodeClick,
+  diffMode,
+  diffSharedSet,
+  diffOnlyASet,
+  diffOnlyBSet,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -171,11 +180,26 @@ export function GraphCanvas({
       if (rootCauseIds.has(n.id)) classes.push("root-cause");
       if (step !== undefined && step === activeStep) classes.push("active");
 
+      // Diff mode colouring overrides
+      let nodeColour = getNodeColour(n.type);
+      if (diffMode) {
+        if (diffSharedSet && diffSharedSet.has(n.id)) {
+          nodeColour = "#22c55e";   // green = shared
+          classes.push("diff-shared");
+        } else if (diffOnlyASet && diffOnlyASet.has(n.id)) {
+          nodeColour = "#3b82f6";   // blue = only in A
+          classes.push("diff-only-a");
+        } else if (diffOnlyBSet && diffOnlyBSet.has(n.id)) {
+          nodeColour = "#f97316";   // orange = only in B
+          classes.push("diff-only-b");
+        }
+      }
+
       elements.push({
         data: {
           id: n.id,
           label: n.name || n.label || n.id,
-          color: getNodeColour(n.type),
+          color: nodeColour,
           type: n.type,
           repo: n.repo,
           file: n.file,
@@ -365,26 +389,52 @@ export function GraphCanvas({
           zIndex: 10,
         }}
       >
-        {Object.entries(NODE_COLOURS).map(([type, colour]) => (
-          <div key={type} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                display: "inline-block",
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                backgroundColor: colour,
-              }}
-            />
-            {type}
-          </div>
-        ))}
-        <div style={{ borderTop: "1px solid #1e293b", marginTop: 2, paddingTop: 4 }}>
-          <span style={{ color: "#f59e0b" }}>amber border</span> = visited
-        </div>
-        <div>
-          <span style={{ color: "#ef4444" }}>red border</span> = root cause
-        </div>
+        {diffMode ? (
+          <>
+            <div style={{ fontWeight: 700, color: "#e2e8f0", marginBottom: 2 }}>Diff Mode</div>
+            {[
+              { colour: "#22c55e", label: "shared" },
+              { colour: "#3b82f6", label: "only in A" },
+              { colour: "#f97316", label: "only in B" },
+            ].map(({ colour, label }) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    backgroundColor: colour,
+                  }}
+                />
+                {label}
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {Object.entries(NODE_COLOURS).map(([type, colour]) => (
+              <div key={type} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    backgroundColor: colour,
+                  }}
+                />
+                {type}
+              </div>
+            ))}
+            <div style={{ borderTop: "1px solid #1e293b", marginTop: 2, paddingTop: 4 }}>
+              <span style={{ color: "#f59e0b" }}>amber border</span> = visited
+            </div>
+            <div>
+              <span style={{ color: "#ef4444" }}>red border</span> = root cause
+            </div>
+          </>
+        )}
       </div>
       {/* Workspace label */}
       {workspace && (

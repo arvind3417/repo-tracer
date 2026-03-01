@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
 import { SplitView } from "./components/SplitView";
+import { SearchBar } from "./components/SearchBar";
 import type { WorkspaceSummary } from "./types";
 import { getWorkspaces } from "./api";
 import "./styles/globals.css";
 
 const topBarStyles: React.CSSProperties = {
-  height: 40,
-  minHeight: 40,
+  height: 44,
+  minHeight: 44,
   display: "flex",
   alignItems: "center",
-  gap: 16,
+  gap: 12,
   padding: "0 16px",
   backgroundColor: "var(--bg-secondary, #0f172a)",
   borderBottom: "1px solid #1e293b",
@@ -23,6 +24,7 @@ const brandStyles: React.CSSProperties = {
   letterSpacing: "0.05em",
   textTransform: "uppercase",
   opacity: 0.9,
+  flexShrink: 0,
 };
 
 const labelStyles: React.CSSProperties = {
@@ -30,6 +32,7 @@ const labelStyles: React.CSSProperties = {
   color: "#475569",
   marginLeft: "auto",
   letterSpacing: "0.04em",
+  flexShrink: 0,
 };
 
 const selectStyles: React.CSSProperties = {
@@ -41,21 +44,44 @@ const selectStyles: React.CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
   outline: "none",
+  flexShrink: 0,
 };
 
 export default function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>("");
+  const [deepLinkSession, setDeepLinkSession] = useState<string | null>(null);
 
+  // Deep link support: read ?session= and ?workspace= from URL
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionParam = params.get("session");
+    const workspaceParam = params.get("workspace");
+
+    if (sessionParam) {
+      setDeepLinkSession(sessionParam);
+    }
+
     getWorkspaces().then((ws) => {
       setWorkspaces(ws);
+      if (workspaceParam) {
+        // Auto-select workspace from URL if it exists
+        const found = ws.find((w) => w.workspace === workspaceParam);
+        if (found) {
+          setSelectedWorkspace(found.workspace);
+          return;
+        }
+      }
       if (ws.length > 0 && !selectedWorkspace) {
         setSelectedWorkspace(ws[0].workspace);
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleSearchSelect = (sessionId: string, _step: number | null) => {
+    setDeepLinkSession(sessionId);
+  };
 
   return (
     <div
@@ -71,6 +97,9 @@ export default function App() {
       {/* Top bar */}
       <div style={topBarStyles}>
         <span style={brandStyles}>repo-tracer</span>
+
+        {/* Search bar */}
+        <SearchBar onSelectResult={handleSearchSelect} />
 
         <span style={labelStyles}>workspace</span>
         <select
@@ -91,7 +120,10 @@ export default function App() {
 
       {/* Three-panel layout */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
-        <SplitView workspace={selectedWorkspace} />
+        <SplitView
+          workspace={selectedWorkspace}
+          initialSessionId={deepLinkSession}
+        />
       </div>
     </div>
   );

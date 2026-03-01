@@ -2,12 +2,14 @@ import { useState, useEffect } from "react";
 import type { TraceSession } from "../types";
 import { getSession } from "../api";
 import { StepCard } from "./StepCard";
+import { ExportButton } from "./ExportButton";
 import styles from "../styles/Timeline.module.css";
 
 interface TimelineProps {
   sessionId: string | null;
   activeStep?: number;
   onStepClick?: (step: number) => void;
+  workspace?: string;
 }
 
 function formatDate(iso: string): string {
@@ -32,7 +34,7 @@ function calcDuration(started: string, completed?: string): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function Timeline({ sessionId, activeStep, onStepClick }: TimelineProps) {
+export function Timeline({ sessionId, activeStep, onStepClick, workspace }: TimelineProps) {
   const [session, setSession] = useState<TraceSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,8 +119,13 @@ export function Timeline({ sessionId, activeStep, onStepClick }: TimelineProps) 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <div className={styles.queryLabel}>query</div>
-        <div className={styles.query}>{session.query}</div>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+          <div>
+            <div className={styles.queryLabel}>query</div>
+            <div className={styles.query}>{session.query}</div>
+          </div>
+          <ExportButton sessionId={session.session_id} workspace={workspace} />
+        </div>
         <div className={styles.metadata}>
           <span className={styles.repoBadge}>{session.repo}</span>
           <span className={styles.dot}>·</span>

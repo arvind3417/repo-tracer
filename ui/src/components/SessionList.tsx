@@ -1,11 +1,16 @@
-import { useState, useEffect, useCallback } from "react";
-import type { SessionSummary } from "../types";
+import { useState, useCallback } from "react";
+import type { SessionSummary, DiffResponse } from "../types";
 import { getSessions, createMockTrace } from "../api";
+import { DiffSelector } from "./DiffSelector";
 import styles from "../styles/SessionList.module.css";
 
 interface SessionListProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
+  sessions: SessionSummary[];
+  onSessionsChange: (sessions: SessionSummary[]) => void;
+  onDiffRequested: (diff: DiffResponse) => void;
+  workspace: string;
 }
 
 function timeAgo(iso: string): string {
@@ -32,25 +37,28 @@ function truncate(str: string, max: number): string {
   return str.slice(0, max - 1) + "…";
 }
 
-export function SessionList({ selectedId, onSelect }: SessionListProps) {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+export function SessionList({
+  selectedId,
+  onSelect,
+  sessions,
+  onSessionsChange,
+  onDiffRequested,
+  workspace,
+}: SessionListProps) {
   const [loadingMock, setLoadingMock] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDiffSelector, setShowDiffSelector] = useState(false);
 
   const fetchSessions = useCallback(async () => {
     try {
       const data = await getSessions();
-      setSessions(data);
+      onSessionsChange(data);
       setError(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load sessions";
       setError(msg);
     }
-  }, []);
-
-  useEffect(() => {
-    fetchSessions();
-  }, [fetchSessions]);
+  }, [onSessionsChange]);
 
   const handleLoadMock = async () => {
     setLoadingMock(true);
@@ -67,20 +75,32 @@ export function SessionList({ selectedId, onSelect }: SessionListProps) {
   };
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} style={{ position: "relative" }}>
       <div className={styles.header}>
         <div className={styles.headerTitle}>trace sessions</div>
-        <button
-          className={styles.mockBtn}
-          onClick={handleLoadMock}
-          disabled={loadingMock}
-        >
-          {loadingMock ? (
-            <span className={styles.loadingText}>generating...</span>
-          ) : (
-            <>+ Load mock</>
+        <div style={{ display: "flex", gap: 6 }}>
+          {sessions.length >= 2 && (
+            <button
+              className={styles.mockBtn}
+              onClick={() => setShowDiffSelector(true)}
+              title="Compare two sessions"
+              style={{ backgroundColor: "#1e293b", border: "1px solid #334155" }}
+            >
+              Diff
+            </button>
           )}
-        </button>
+          <button
+            className={styles.mockBtn}
+            onClick={handleLoadMock}
+            disabled={loadingMock}
+          >
+            {loadingMock ? (
+              <span className={styles.loadingText}>generating...</span>
+            ) : (
+              <>+ Load mock</>
+            )}
+          </button>
+        </div>
       </div>
 
       {error && <div className={styles.error}>error: {error}</div>}
@@ -112,6 +132,18 @@ export function SessionList({ selectedId, onSelect }: SessionListProps) {
           ))
         )}
       </div>
+
+      {showDiffSelector && (
+        <DiffSelector
+          sessions={sessions}
+          workspace={workspace}
+          onDiffLoaded={(diff) => {
+            setShowDiffSelector(false);
+            onDiffRequested(diff);
+          }}
+          onClose={() => setShowDiffSelector(false)}
+        />
+      )}
     </div>
   );
 }
