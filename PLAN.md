@@ -64,26 +64,93 @@ repo-tracer/
 
 ## Graph Schema
 
-**Nodes**
+### Nodes
 
 | Label | Properties |
 |---|---|
-| `File` | path, package, line_count |
-| `Package` | name, import_path |
-| `Function` | name, file, line_start, line_end, signature |
-| `Method` | name, receiver, file, line_start, line_end |
-| `Struct` | name, file, line |
-| `Interface` | name, file, line |
+| `Repo` | name, path, workspace |
+| `File` | path, package, line_count, repo |
+| `Package` | name, import_path, repo |
+| `Function` | name, file, line_start, line_end, signature, repo |
+| `Method` | name, receiver, file, line_start, line_end, repo |
+| `Struct` | name, file, line, repo |
+| `Interface` | name, file, line, repo |
+| `KafkaTopic` | name, workspace |
+| `GRPCService` | name, proto_file, workspace |
 
-**Edges**
+All nodes carry a `repo` property for namespace isolation when multiple repos are loaded into the same FalkorDB instance.
+
+### Edges — In-Repo (precise)
 
 | Type | From → To | Meaning |
 |---|---|---|
 | `IMPORTS` | File → Package | this file imports that package |
-| `CALLS` | Function → Function | direct call edge |
+| `CALLS` | Function → Function | direct call edge (from callgraph analysis) |
 | `IMPLEMENTS` | Struct → Interface | struct satisfies interface |
 | `DEFINED_IN` | Function → File | where the function lives |
 | `BELONGS_TO` | File → Package | file is part of package |
+
+### Edges — Cross-Repo (inferred)
+
+| Type | From → To | Detected by | Confidence |
+|---|---|---|---|
+| `DEPENDS_ON` | Repo → Repo | `go.mod` direct dependency | High |
+| `CALLS_SERVICE` | Function → GRPCService | `pb.NewXxxClient(conn)` pattern | Medium |
+| `PRODUCES_EVENT` | Function → KafkaTopic | topic name string constant in producer call | Medium |
+| `CONSUMES_EVENT` | KafkaTopic → Function | topic name string constant in consumer registration | Medium |
+
+Cross-repo edges are "fuzzy" — inferred from patterns, not type-checked. They are stored with a `confidence` property and rendered differently in the UI.
+
+---
+
+## Cross-Repo Context
+
+### The Problem
+
+In a multi-service architecture, a query like "why did this payment fail?" may span 3–4 repos. With a single-repo graph, the AI's trace hits a service boundary and the graph goes dark — the step appears in the timeline but has no corresponding node to highlight.
+
+### Three Cross-Repo Cases
+
+| Case | Example | How it appears in Go code |
+|---|---|---|
+| **Shared library** | `goutils`, `foundation` | `go.mod` dependency + import path |
+| **gRPC service call** | service A calling service B | `pb.NewXxxClient(...)`, service name constant |
+| **Kafka event** | producer in repo A, consumer in repo B | topic name string constant on both sides |
+
+### Multi-Repo Parsing
+
+The CLI accepts multiple repos and loads them into a shared FalkorDB workspace:
+
+```bash
+repo-tracer parse \
+  ./api \
+  ./pg-router \
+  ./scrooge \
+  --workspace razorpay
+```
+
+Each repo is namespaced in FalkorDB. Shared libraries from `go.mod` are parsed once and linked to all repos that depend on them.
+
+### Cross-Repo Edge Detection
+
+**`go.mod` → `DEPENDS_ON`**
+Parse each repo's `go.mod`. If repo B appears as a `require` entry in repo A, create a `DEPENDS_ON` edge between their `Repo` nodes.
+
+**gRPC → `CALLS_SERVICE`**
+Scan for `pb.NewXxxClient(conn)` patterns using AST. The generated client type name maps directly to the proto service name. Match that service name to a `GRPCService` node (built from `.proto` files if available in the workspace, otherwise as an unresolved stub).
+
+**Kafka → `PRODUCES_EVENT` / `CONSUMES_EVENT`**
+Scan for topic name string constants passed to producer and consumer calls. Topic names are matched across repos — a producer of `"payment.captured"` in `api` gets linked to a consumer of `"payment.captured"` in `scrooge`.
+
+### UI Treatment
+
+| Node type | Visual style |
+|---|---|
+| Same-repo node | Solid, fully clickable, shows source |
+| Cross-repo node (resolved) | Different colour, links to that repo's section of the graph |
+| Cross-repo node (unresolved) | Dashed/ghost — shows the string constant the AI found, no source link |
+
+When a trace step lands on an unresolved cross-repo node, the timeline shows it as a "boundary step" with a note: _"AI reached service boundary — X not in workspace. Add it with `repo-tracer parse ./X`."_
 
 ---
 
@@ -165,20 +232,40 @@ Every AI tool call emits this before and after execution:
 
 ---
 
+### Phase 3.5 — Multi-Repo Support
+
+**Goal:** Parser handles multiple repos in a shared workspace. Cross-repo edges are detected and stored. The resolver in Phase 4 works across repo boundaries.
+
+This phase sits between the timeline UI and graph integration because the Phase 4 resolver needs to know about repo namespacing before it can correctly map trace targets to graph nodes.
+
+- [ ] CLI: `repo-tracer parse ./repo-a ./repo-b --workspace <name>`
+- [ ] Add `Repo` node and `workspace` property to all nodes
+- [ ] Parse `go.mod` for each repo → emit `DEPENDS_ON` edges between `Repo` nodes
+- [ ] Detect `pb.NewXxxClient(conn)` patterns → emit `CALLS_SERVICE` edges
+- [ ] Detect Kafka producer/consumer topic strings → emit `PRODUCES_EVENT` / `CONSUMES_EVENT` edges, match across repos
+- [ ] Parse `.proto` files if present → create `GRPCService` nodes
+- [ ] Mark cross-repo edges with `confidence` property (`high` / `medium`)
+- [ ] Validate: load 2 related repos, verify cross-repo edges appear in FalkorDB browser
+
+**Done when:** FalkorDB shows two repos in the same graph with typed cross-repo edges between them.
+
+---
+
 ### Phase 4 — Graph + Trace Integration
 
 **Goal:** Connect trace steps to FalkorDB nodes. The graph lights up as the AI navigates.
 
-This is the key integration: mapping `settlement_service.go:47` → FalkorDB node ID.
+This is the key integration: mapping `settlement_service.go:47` → FalkorDB node ID — now across repo boundaries.
 
-- [ ] Resolver: file path + symbol name → FalkorDB node ID
-- [ ] FastAPI: `GET /traces/:id/subgraph` → visited nodes + edges
-- [ ] Cytoscape.js canvas loads full repo graph
-- [ ] Trace playback: visited nodes animate in sequence
+- [ ] Resolver: file path + symbol name + repo → FalkorDB node ID (namespace-aware)
+- [ ] FastAPI: `GET /traces/:id/subgraph` → visited nodes + edges (may span multiple repos)
+- [ ] Cytoscape.js canvas loads workspace graph — repos shown as distinct clusters
+- [ ] Trace playback: visited nodes animate in sequence, cross-repo hops visually distinct
+- [ ] Unresolved cross-repo steps shown as ghost nodes with "Add this repo" prompt
 - [ ] Click a node → jump to that step in the timeline
-- [ ] Sidebar: files visited, functions called, call depth
+- [ ] Sidebar: files visited, functions called, repos touched, call depth
 
-**Done when:** Side-by-side view — timeline left, animated graph right. Nodes light up as you step through.
+**Done when:** Side-by-side view — timeline left, animated graph right. Cross-repo hops visible as the AI moves between services.
 
 ---
 
