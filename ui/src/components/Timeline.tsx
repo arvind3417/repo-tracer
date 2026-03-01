@@ -6,6 +6,8 @@ import styles from "../styles/Timeline.module.css";
 
 interface TimelineProps {
   sessionId: string | null;
+  activeStep?: number;
+  onStepClick?: (step: number) => void;
 }
 
 function formatDate(iso: string): string {
@@ -30,7 +32,7 @@ function calcDuration(started: string, completed?: string): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function Timeline({ sessionId }: TimelineProps) {
+export function Timeline({ sessionId, activeStep, onStepClick }: TimelineProps) {
   const [session, setSession] = useState<TraceSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,11 +71,16 @@ export function Timeline({ sessionId }: TimelineProps) {
     });
   };
 
+  const handleStepClick = (stepNum: number) => {
+    toggleStep(stepNum);
+    onStepClick?.(stepNum);
+  };
+
   if (!sessionId) {
     return (
       <div className={styles.container}>
         <div className={styles.empty}>
-          <span className={styles.emptyIcon}>▶</span>
+          <span className={styles.emptyIcon}>&#9654;</span>
           <span className={styles.emptyText}>Select a trace session</span>
           <span className={styles.emptyHint}>
             or click "Load mock" to generate a sample trace
@@ -139,13 +146,17 @@ export function Timeline({ sessionId }: TimelineProps) {
           <div
             key={step.step}
             className={styles.stepWrapper}
-            style={{ animationDelay: `${i * 150}ms` }}
+            style={{
+              animationDelay: `${i * 150}ms`,
+              outline: step.step === activeStep ? "2px solid #f59e0b" : undefined,
+              borderRadius: 6,
+            }}
           >
             <StepCard
               step={step}
               index={i}
               isExpanded={expandedSteps.has(step.step)}
-              onToggle={() => toggleStep(step.step)}
+              onToggle={() => handleStepClick(step.step)}
             />
             {i < sortedSteps.length - 1 && (
               <div className={styles.connector} />
