@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import traces
+from api.routes import graph
 
 app = FastAPI(title="repo-tracer API")
 
@@ -14,6 +15,7 @@ app.add_middleware(
 )
 
 app.include_router(traces.router, prefix="/api")
+app.include_router(graph.router, prefix="/api")
 
 
 @app.get("/health")
