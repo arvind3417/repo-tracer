@@ -74,12 +74,11 @@ class FalkorDBClient:
         try:
             r = self._get_redis()
             if params:
-                # FalkorDB accepts CYPHER key=value ... MATCH ... syntax or
-                # parametrised queries via the params dict encoded as a GRAPH.QUERY
-                # argument. We inline params as a simple approach.
                 cypher = self._interpolate_params(cypher, params)
-            raw = r.execute_command("GRAPH.QUERY", graph, cypher, "--compact")
-            return self._parse_result(raw)
+            # Use non-compact mode — values come back as plain Python scalars,
+            # no schema lookup needed to decode property key IDs.
+            raw = r.execute_command("GRAPH.QUERY", graph, cypher)
+            return self._parse_result_plain(raw)
         except Exception as exc:
             logger.error("GRAPH.QUERY on '%s' failed: %s", graph, exc)
             return []
@@ -106,28 +105,22 @@ class FalkorDBClient:
                 cypher = cypher.replace(placeholder, str(val))
         return cypher
 
-    def _parse_result(self, raw: Any) -> list[dict]:
-        """Parse FalkorDB compact result format into a list of dicts.
+    def _parse_result_plain(self, raw: Any) -> list[dict]:
+        """Parse non-compact FalkorDB result: [header, rows, stats].
 
-        Compact format: [header, rows, stats]
-          header: [[type_code, name], ...]
-          rows:   [[value, ...], ...]
-          stats:  [stat_string, ...]
+        Non-compact format:
+          header: ['col_name', ...]
+          rows:   [[scalar_or_node_dict, ...], ...]
+        Node values are returned as dicts with 'id', 'labels', and property keys.
+        Scalar values are plain Python strings/ints/floats/None.
         """
         if not raw or not isinstance(raw, (list, tuple)) or len(raw) < 2:
             return []
 
-        header = raw[0]
-        rows = raw[1] if len(raw) > 1 else []
+        header = raw[0]   # plain list of column name strings
+        rows   = raw[1] if len(raw) > 1 else []
 
-        # Extract column names from header
-        col_names: list[str] = []
-        if header:
-            for col in header:
-                if isinstance(col, (list, tuple)) and len(col) >= 2:
-                    col_names.append(str(col[1]))
-                else:
-                    col_names.append(str(col))
+        col_names = [str(c) for c in header] if header else []
 
         results: list[dict] = []
         for row in rows:
@@ -136,9 +129,38 @@ class FalkorDBClient:
             record: dict = {}
             for i, val in enumerate(row):
                 col = col_names[i] if i < len(col_names) else str(i)
-                record[col] = self._decode_value(val)
+                record[col] = self._decode_plain_value(val)
             results.append(record)
         return results
+
+    def _decode_plain_value(self, val: Any) -> Any:
+        """Decode a value from non-compact FalkorDB results.
+
+        Scalars (str, int, float, None) are returned as-is.
+        Node dicts have the shape {'id': N, 'labels': [...], **properties}.
+        """
+        if val is None or isinstance(val, (str, int, float, bool)):
+            return val
+        if isinstance(val, (list, tuple)):
+            # Could be a node: [id, [labels], {props}] or just a list value
+            if (len(val) == 3
+                    and isinstance(val[0], int)
+                    and isinstance(val[1], list)):
+                # node: [id, labels_list, props_dict_or_list]
+                node_id = val[0]
+                labels  = val[1]
+                props   = val[2] if len(val) > 2 else {}
+                if isinstance(props, dict):
+                    return {"id": node_id, "labels": labels, **props}
+                return {"id": node_id, "labels": labels}
+            return [self._decode_plain_value(v) for v in val]
+        if isinstance(val, dict):
+            return {k: self._decode_plain_value(v) for k, v in val.items()}
+        return val
+
+    def _parse_result(self, raw: Any) -> list[dict]:
+        """Legacy compact parser — kept for reference but no longer used."""
+        return self._parse_result_plain(raw)
 
     def _decode_value(self, val: Any) -> Any:
         """Decode a FalkorDB compact value.

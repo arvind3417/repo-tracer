@@ -47,9 +47,11 @@ def main(argv: list[str] | None = None) -> None:
         print("Usage: python -m tracer.cli trace \"<query>\" --repo <path>", file=sys.stderr)
         sys.exit(1)
 
+    # Support both direct API key and Vertex AI (CLAUDE_CODE_USE_VERTEX=1)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY is not set.", file=sys.stderr)
+    using_vertex = os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1"
+    if not api_key and not using_vertex:
+        print("Error: set ANTHROPIC_API_KEY or CLAUDE_CODE_USE_VERTEX=1", file=sys.stderr)
         sys.exit(1)
 
     repo_path = os.path.abspath(args.repo)

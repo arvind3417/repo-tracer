@@ -10,12 +10,32 @@ from typing import List
 from .models import TraceStep, TraceSession
 from .phoenix_sink import PhoenixSink
 
+_VERTEX_PROJECT = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
+_VERTEX_REGION  = os.environ.get("CLOUD_ML_REGION") or "us-east5"
+
+
+def _make_client():
+    """Return AnthropicVertex if running via Vertex AI, else standard Anthropic client."""
+    if os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1" and _VERTEX_PROJECT:
+        from anthropic import AnthropicVertex
+        import warnings
+        warnings.filterwarnings("ignore", message=".*quota project.*")
+        return AnthropicVertex(project_id=_VERTEX_PROJECT, region=_VERTEX_REGION)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    return anthropic.Anthropic(api_key=api_key)
+
+
+# Model IDs differ between Vertex and direct API
+_IS_VERTEX = os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1"
+_MODEL_SONNET = "claude-sonnet-4-5" if _IS_VERTEX else "claude-sonnet-4-6"
+_MODEL_HAIKU  = "claude-haiku-4-5"  if _IS_VERTEX else "claude-haiku-4-5-20251001"
+
 
 class TracedClaudeClient:
     """Anthropic SDK wrapper that intercepts every tool call and emits trace events."""
 
     def __init__(self, api_key: str, sink: PhoenixSink, repo_path: str) -> None:
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = _make_client()
         self.sink = sink
         self.repo_path = os.path.abspath(repo_path)
         self.tools = self._build_tools()
@@ -126,7 +146,7 @@ class TracedClaudeClient:
         """Ask a fast model to produce a structured reason before executing the tool."""
         try:
             reason_resp = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=_MODEL_HAIKU,
                 max_tokens=256,
                 system=(
                     "You are a reasoning logger. Given a tool call about to be made, "
@@ -144,7 +164,11 @@ class TracedClaudeClient:
                     }
                 ],
             )
-            raw = reason_resp.content[0].text
+            raw = reason_resp.content[0].text.strip()
+            # Strip markdown code fences (```json ... ``` or ``` ... ```)
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw.strip())
             reason_data = json.loads(raw)
             return reason_data.get("reason", "")
         except Exception:
@@ -157,7 +181,7 @@ class TracedClaudeClient:
 
         while True:
             response = self.client.messages.create(
-                model="claude-sonnet-4-6",
+                model=_MODEL_SONNET,
                 max_tokens=4096,
                 tools=self.tools,
                 messages=messages,

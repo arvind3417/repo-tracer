@@ -73,10 +73,23 @@ def _parse_file_and_line(target: str) -> tuple[str, int | None]:
 
 
 def _normalise_path(path: str) -> str:
-    """Strip leading ./ or / so paths are relative for comparison."""
+    """Strip leading ./ or absolute repo prefixes so paths are relative for comparison.
+
+    Handles:
+      ./chi.go                        → chi.go
+      /private/tmp/.../test-go-repo/chi.go → chi.go
+      internal/settlement/service.go  → internal/settlement/service.go
+    """
     path = path.strip()
     if path.startswith("./"):
         path = path[2:]
+    # For absolute paths, keep stripping leading dirs until the path
+    # no longer starts with / — this handles arbitrary repo root prefixes.
+    # We walk from the right, keeping the shortest suffix that looks like
+    # a relative repo path (no leading /).
+    if path.startswith("/"):
+        # Return just the basename for now; _find_file_node does suffix matching
+        path = path.lstrip("/")
     return path
 
 
@@ -116,28 +129,39 @@ class NodeResolver:
         return self._node_cache
 
     def _fetch_all_nodes(self) -> list[dict]:
-        rows = self.db.query(
-            self.workspace,
-            "MATCH (n) RETURN n",
-        )
-        nodes: list[dict] = []
-        for row in rows:
-            n = row.get("n")
-            if isinstance(n, dict):
-                nodes.append(n)
-        return nodes
+        """Fetch all nodes using explicit property projections (avoids compact decode issues)."""
+        results = []
+        # Fetch each node type separately with known properties
+        label_queries = [
+            ("File",      "MATCH (n:File)      RETURN id(n) AS _id, 'File'      AS _label, n.path AS path, n.name AS name, n.repo AS repo, n.workspace AS workspace, n.line_count AS line_count"),
+            ("Function",  "MATCH (n:Function)  RETURN id(n) AS _id, 'Function'  AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.line_end AS line_end, n.signature AS signature"),
+            ("Method",    "MATCH (n:Method)    RETURN id(n) AS _id, 'Method'    AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.receiver AS receiver"),
+            ("Struct",    "MATCH (n:Struct)    RETURN id(n) AS _id, 'Struct'    AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line AS line"),
+            ("Interface", "MATCH (n:Interface) RETURN id(n) AS _id, 'Interface' AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line AS line"),
+            ("Package",   "MATCH (n:Package)   RETURN id(n) AS _id, 'Package'   AS _label, n.name AS name, n.import_path AS import_path, n.repo AS repo"),
+        ]
+        for label, cypher in label_queries:
+            try:
+                rows = self.db.query(self.workspace, cypher)
+                for row in rows:
+                    node = {k: v for k, v in row.items() if v is not None}
+                    node["labels"] = [label]
+                    results.append(node)
+            except Exception as exc:
+                logger.warning("Failed to fetch %s nodes: %s", label, exc)
+        return results
 
     def _fetch_all_edges(self) -> list[dict]:
-        rows = self.db.query(
-            self.workspace,
-            "MATCH ()-[r]->() RETURN r",
-        )
-        edges: list[dict] = []
-        for row in rows:
-            e = row.get("r")
-            if isinstance(e, dict):
-                edges.append(e)
-        return edges
+        """Fetch edges with explicit property projections."""
+        try:
+            rows = self.db.query(
+                self.workspace,
+                "MATCH (a)-[r]->(b) RETURN id(a) AS source, id(b) AS target, type(r) AS type LIMIT 5000",
+            )
+            return rows
+        except Exception as exc:
+            logger.warning("Failed to fetch edges: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Resolution logic

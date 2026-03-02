@@ -43,15 +43,17 @@ def _node_to_dict(node: dict) -> dict:
     """Normalise a raw FalkorDB node dict for the API response."""
     labels = node.get("labels", [])
     node_type = labels[0] if labels else "Unknown"
+    # _id is our internal FalkorDB node id (from id(n) projection)
+    node_id = node.get("_id", node.get("id", ""))
     return {
-        "id": str(node.get("id", "")),
+        "id": str(node_id),
         "label": str(node.get("name", "")),
         "type": node_type,
         "name": str(node.get("name", "")),
         "repo": str(node.get("repo", "")),
         "file": str(node.get("file", node.get("path", ""))),
-        "line": node.get("start_line", node.get("line")),
-        **{k: v for k, v in node.items() if k not in ("id", "labels")},
+        "line": node.get("line_start", node.get("line")),
+        **{k: v for k, v in node.items() if k not in ("_id", "id", "labels")},
     }
 
 
@@ -113,24 +115,16 @@ def get_nodes(workspace: str, type: Optional[str] = Query(None)):
     if not client.is_available():
         return {"nodes": [], "warning": "FalkorDB is not reachable"}
 
+    # Use NodeResolver's _fetch_all_nodes which uses safe property projections
+    from api.resolver import NodeResolver
+    resolver = NodeResolver(client, workspace)
+    all_nodes = resolver._all_nodes()
+
     if type:
-        # Build a label filter: MATCH (n) WHERE n:Function OR n:File ...
-        labels = [t.strip() for t in type.split(",") if t.strip()]
-        if labels:
-            label_clause = " OR ".join(f"n:{label}" for label in labels)
-            cypher = f"MATCH (n) WHERE {label_clause} RETURN n"
-        else:
-            cypher = "MATCH (n) RETURN n"
-    else:
-        cypher = "MATCH (n) RETURN n"
+        filter_labels = {t.strip() for t in type.split(",") if t.strip()}
+        all_nodes = [n for n in all_nodes if set(n.get("labels", [])) & filter_labels]
 
-    rows = client.query(workspace, cypher)
-    nodes = []
-    for row in rows:
-        n = row.get("n")
-        if isinstance(n, dict):
-            nodes.append(_node_to_dict(n))
-
+    nodes = [_node_to_dict(n) for n in all_nodes]
     return {"nodes": nodes}
 
 
