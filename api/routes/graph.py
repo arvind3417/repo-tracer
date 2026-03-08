@@ -217,6 +217,75 @@ def get_subgraph(workspace: str, session_id: str = Query(...)):
     }
 
 
+@router.get("/graph/{workspace}/session-neighborhood")
+def get_session_neighborhood(
+    workspace: str,
+    session_id: str = Query(...),
+    hops: int = Query(1, ge=1, le=3),
+):
+    """Return a focused neighborhood graph around nodes visited in a session.
+
+    Useful for large repos where full graph rendering is expensive.
+    """
+    client = _get_client()
+    if not client.is_available():
+        return {"nodes": [], "edges": [], "warning": "FalkorDB is not reachable"}
+
+    session = _load_session(session_id)
+    resolver = NodeResolver(client, workspace)
+    sub = resolver.resolve_session(session)
+
+    seed_ids = {str(r.node_id) for r in sub.resolved if str(r.node_id)}
+    if not seed_ids:
+        return {"nodes": [], "edges": [], "session_id": session_id, "workspace": workspace}
+
+    all_nodes = resolver._all_nodes()
+    node_by_id = {str(n.get("_id", n.get("id", ""))): n for n in all_nodes}
+    all_edges = resolver._fetch_all_edges()
+
+    frontier = set(seed_ids)
+    included = set(seed_ids)
+    kept_edges: list[dict] = []
+
+    for _ in range(hops):
+        next_frontier: set[str] = set()
+        for e in all_edges:
+            src = str(e.get("source", ""))
+            dst = str(e.get("target", ""))
+            if src in frontier or dst in frontier:
+                edge_id = str(e.get("id", f"{src}->{dst}:{e.get('type', 'REL')}"))
+                kept_edges.append(
+                    {
+                        "id": edge_id,
+                        "source": src,
+                        "target": dst,
+                        "type": str(e.get("type", "")),
+                        "confidence": str(e.get("confidence", "1.0")),
+                    }
+                )
+                if src not in included:
+                    next_frontier.add(src)
+                if dst not in included:
+                    next_frontier.add(dst)
+                included.add(src)
+                included.add(dst)
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    nodes_out = [_node_to_dict(node_by_id[nid]) for nid in sorted(included) if nid in node_by_id]
+    return {
+        "nodes": nodes_out,
+        "edges": kept_edges,
+        "workspace": workspace,
+        "session_id": session_id,
+        "seed_count": len(seed_ids),
+        "node_count": len(nodes_out),
+        "edge_count": len(kept_edges),
+        "hops": hops,
+    }
+
+
 @router.get("/graph/{workspace}/node/{node_id}")
 def get_node(workspace: str, node_id: str):
     """Return full details for a single node by its FalkorDB node ID."""

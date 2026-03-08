@@ -40,6 +40,7 @@ type Extractor struct {
 	seenPackages map[string]bool
 	seenFiles    map[string]bool
 	seenFuncs    map[string]bool
+	seenMethods  map[string]bool
 }
 
 // New creates a new Extractor for the given repository path and workspace.
@@ -54,6 +55,7 @@ func New(repoPath, workspace string) *Extractor {
 		seenPackages: make(map[string]bool),
 		seenFiles:    make(map[string]bool),
 		seenFuncs:    make(map[string]bool),
+		seenMethods:  make(map[string]bool),
 	}
 }
 
@@ -204,12 +206,13 @@ func (e *Extractor) processFuncDecl(d *ast.FuncDecl, filePath, _ string) {
 	if d.Recv != nil && len(d.Recv.List) > 0 {
 		// Method.
 		receiverType := fieldListTypeString(d.Recv)
-		key := fmt.Sprintf("%s.%s@%s", receiverType, d.Name.Name, filePath)
-		if !e.seenFuncs[key] {
-			e.seenFuncs[key] = true
+		methodKey := fmt.Sprintf("%s:%s:%d:%d", filePath, receiverType+"."+d.Name.Name, start.Line, start.Column)
+		if !e.seenMethods[methodKey] {
+			e.seenMethods[methodKey] = true
 		}
 		mn := graph.MethodNode{
 			Name:         d.Name.Name,
+			MethodKey:    methodKey,
 			ReceiverType: receiverType,
 			FilePath:     filePath,
 			LineStart:    start.Line,
@@ -229,27 +232,34 @@ func (e *Extractor) processFuncDecl(d *ast.FuncDecl, filePath, _ string) {
 		// DEFINED_IN edge.
 		e.result.Edges = append(e.result.Edges, graph.Edge{
 			FromLabel: graph.NodeTypeMethod,
-			FromKey:   "name",
-			FromValue: d.Name.Name,
+			FromKey:   "method_key",
+			FromValue: methodKey,
 			ToLabel:   graph.NodeTypeFile,
 			ToKey:     "path",
 			ToValue:   filePath,
 			Relation:  graph.EdgeDefinedIn,
 		})
+
+		// Nested/local functions inside method body.
+		e.processNestedFuncLits(d.Body, filePath, methodKey, receiverType+"."+d.Name.Name, graph.NodeTypeMethod)
 	} else {
 		// Function.
-		key := fmt.Sprintf("%s@%s", d.Name.Name, filePath)
-		if !e.seenFuncs[key] {
-			e.seenFuncs[key] = true
+		functionKey := fmt.Sprintf("%s:%s:%d:%d", filePath, d.Name.Name, start.Line, start.Column)
+		if !e.seenFuncs[functionKey] {
+			e.seenFuncs[functionKey] = true
 		}
+		qualifiedName := fmt.Sprintf("%s::%s", filePath, d.Name.Name)
 		fn := graph.FunctionNode{
-			Name:      d.Name.Name,
-			FilePath:  filePath,
-			LineStart: start.Line,
-			LineEnd:   end.Line,
-			Signature: sig,
-			Repo:      e.repoName,
-			Workspace: e.workspace,
+			Name:          d.Name.Name,
+			QualifiedName: qualifiedName,
+			FunctionKey:   functionKey,
+			Kind:          "top_level",
+			FilePath:      filePath,
+			LineStart:     start.Line,
+			LineEnd:       end.Line,
+			Signature:     sig,
+			Repo:          e.repoName,
+			Workspace:     e.workspace,
 		}
 		e.result.Functions = append(e.result.Functions, fn)
 		e.result.Nodes = append(e.result.Nodes, fn.ToNode())
@@ -257,14 +267,85 @@ func (e *Extractor) processFuncDecl(d *ast.FuncDecl, filePath, _ string) {
 		// DEFINED_IN edge.
 		e.result.Edges = append(e.result.Edges, graph.Edge{
 			FromLabel: graph.NodeTypeFunction,
-			FromKey:   "name",
-			FromValue: d.Name.Name,
+			FromKey:   "function_key",
+			FromValue: functionKey,
 			ToLabel:   graph.NodeTypeFile,
 			ToKey:     "path",
 			ToValue:   filePath,
 			Relation:  graph.EdgeDefinedIn,
 		})
+
+		// Nested/local functions inside function body.
+		e.processNestedFuncLits(d.Body, filePath, functionKey, d.Name.Name, graph.NodeTypeFunction)
 	}
+}
+
+// processNestedFuncLits finds function literals in a parent body and emits
+// nested Function nodes with CONTAINS + DEFINED_IN edges.
+func (e *Extractor) processNestedFuncLits(body *ast.BlockStmt, filePath, parentKey, parentName, parentLabel string) {
+	if body == nil {
+		return
+	}
+	ordinal := 0
+	ast.Inspect(body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		ordinal++
+		start := e.fset.Position(lit.Pos())
+		end := e.fset.Position(lit.End())
+		name := fmt.Sprintf("%s$lambda%d@L%dC%d", parentName, ordinal, start.Line, start.Column)
+		functionKey := fmt.Sprintf("%s:%s:%d:%d", filePath, name, start.Line, start.Column)
+		if e.seenFuncs[functionKey] {
+			return true
+		}
+		e.seenFuncs[functionKey] = true
+
+		fn := graph.FunctionNode{
+			Name:              name,
+			QualifiedName:     fmt.Sprintf("%s::%s", filePath, name),
+			FunctionKey:       functionKey,
+			ParentFunctionKey: parentKey,
+			Kind:              "nested",
+			FilePath:          filePath,
+			LineStart:         start.Line,
+			LineEnd:           end.Line,
+			Signature:         buildFuncTypeSignature(lit.Type),
+			Repo:              e.repoName,
+			Workspace:         e.workspace,
+		}
+		e.result.Functions = append(e.result.Functions, fn)
+		e.result.Nodes = append(e.result.Nodes, fn.ToNode())
+
+		e.result.Edges = append(e.result.Edges, graph.Edge{
+			FromLabel: graph.NodeTypeFunction,
+			FromKey:   "function_key",
+			FromValue: functionKey,
+			ToLabel:   graph.NodeTypeFile,
+			ToKey:     "path",
+			ToValue:   filePath,
+			Relation:  graph.EdgeDefinedIn,
+		})
+
+		e.result.Edges = append(e.result.Edges, graph.Edge{
+			FromLabel: parentLabel,
+			FromKey:   keyForLabel(parentLabel),
+			FromValue: parentKey,
+			ToLabel:   graph.NodeTypeFunction,
+			ToKey:     "function_key",
+			ToValue:   functionKey,
+			Relation:  graph.EdgeContains,
+		})
+		return true
+	})
+}
+
+func keyForLabel(label string) string {
+	if label == graph.NodeTypeMethod {
+		return "method_key"
+	}
+	return "function_key"
 }
 
 // processGenDecl handles type declarations (struct, interface).
@@ -321,6 +402,25 @@ func buildFuncSignature(d *ast.FuncDecl) string {
 	if d.Type.Results != nil && len(d.Type.Results.List) > 0 {
 		b.WriteString(" (")
 		b.WriteString(fieldListString(d.Type.Results))
+		b.WriteString(")")
+	}
+	return b.String()
+}
+
+// buildFuncTypeSignature renders a function literal type signature.
+func buildFuncTypeSignature(ft *ast.FuncType) string {
+	if ft == nil {
+		return "func()"
+	}
+	var b strings.Builder
+	b.WriteString("func(")
+	if ft.Params != nil {
+		b.WriteString(fieldListString(ft.Params))
+	}
+	b.WriteString(")")
+	if ft.Results != nil && len(ft.Results.List) > 0 {
+		b.WriteString(" (")
+		b.WriteString(fieldListString(ft.Results))
 		b.WriteString(")")
 	}
 	return b.String()

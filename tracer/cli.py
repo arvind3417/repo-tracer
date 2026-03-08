@@ -15,7 +15,7 @@ import uuid
 from dotenv import load_dotenv
 
 from .models import TraceSession
-from .phoenix_sink import PhoenixSink, setup_phoenix
+from .phoenix_sink import PhoenixSink, setup_langfuse, setup_phoenix
 from .claude_client import TracedClaudeClient
 
 
@@ -33,6 +33,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--phoenix",
         default=os.environ.get("PHOENIX_ENDPOINT", "http://localhost:4318/v1/traces"),
         help="OTLP HTTP endpoint for Phoenix (default: http://localhost:4318/v1/traces)",
+    )
+    trace_cmd.add_argument(
+        "--sink",
+        choices=["phoenix", "langfuse"],
+        default=os.environ.get("TRACE_SINK", "phoenix"),
+        help="Trace sink backend (default: phoenix)",
+    )
+    trace_cmd.add_argument(
+        "--langfuse-host",
+        default=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        help="Langfuse host (default: https://cloud.langfuse.com)",
     )
 
     return parser.parse_args(argv)
@@ -67,8 +78,15 @@ def main(argv: list[str] | None = None) -> None:
         started_at=datetime.datetime.utcnow(),
     )
 
-    # Set up Phoenix OpenTelemetry sink
-    tracer = setup_phoenix(endpoint=args.phoenix)
+    # Set up OpenTelemetry sink backend
+    if args.sink == "langfuse":
+        try:
+            tracer = setup_langfuse(host=args.langfuse_host)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        tracer = setup_phoenix(endpoint=args.phoenix)
     sink = PhoenixSink(tracer=tracer)
     sink.start_session(session_id=session_id, query=args.query, repo=repo_path)
 
@@ -85,7 +103,10 @@ def main(argv: list[str] | None = None) -> None:
     print("\n" + "=" * 60)
     print(answer)
     print("=" * 60)
-    print(f"\nSession ID: {session_id} — view at http://localhost:6006")
+    if args.sink == "langfuse":
+        print(f"\nSession ID: {session_id} — view in Langfuse at {args.langfuse_host}")
+    else:
+        print(f"\nSession ID: {session_id} — view at http://localhost:6006")
 
     # Persist the session JSON
     traces_dir = os.path.join(os.getcwd(), "traces")

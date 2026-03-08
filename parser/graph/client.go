@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-const batchSize = 500
+const batchSize = 200
 
 // Client wraps a Redis client configured to talk to FalkorDB.
 type Client struct {
@@ -19,7 +20,10 @@ type Client struct {
 // NewClient creates a new FalkorDB client connected to the given address.
 func NewClient(addr string) *Client {
 	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
+		Addr:         addr,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	})
 	return &Client{
 		rdb: rdb,
@@ -167,7 +171,9 @@ func (c *Client) SetupIndexes(graph string) error {
 		{NodeTypeFile, "path"},
 		{NodeTypePackage, "import_path"},
 		{NodeTypeFunction, "name"},
+		{NodeTypeFunction, "function_key"},
 		{NodeTypeMethod, "name"},
+		{NodeTypeMethod, "method_key"},
 		{NodeTypeStruct, "name"},
 		{NodeTypeInterface, "name"},
 	}

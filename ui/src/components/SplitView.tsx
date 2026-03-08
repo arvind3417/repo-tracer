@@ -5,7 +5,7 @@ import { GraphCanvas } from "./GraphCanvas";
 import { DiffView } from "./DiffView";
 import { StatsPanel } from "./StatsPanel";
 import type { GraphNode, GraphEdge, SubgraphResult, SessionSummary, DiffResponse } from "../types";
-import { getGraphNodes, getGraphEdges, getSubgraph, getSessions } from "../api";
+import { getGraphNodes, getGraphEdges, getSubgraph, getSessions, getSessionNeighborhood } from "../api";
 
 interface SplitViewProps {
   workspace: string;
@@ -25,6 +25,7 @@ export function SplitView({ workspace, initialSessionId }: SplitViewProps) {
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
   const [subgraph, setSubgraph] = useState<SubgraphResult | null>(null);
+  const [graphMode, setGraphMode] = useState<"full" | "path_neighbors">("path_neighbors");
 
   // Load sessions list (for DiffSelector)
   useEffect(() => {
@@ -43,13 +44,25 @@ export function SplitView({ workspace, initialSessionId }: SplitViewProps) {
       setGraphEdges([]);
       return;
     }
-    Promise.all([getGraphNodes(workspace), getGraphEdges(workspace)]).then(
-      ([nodes, edges]) => {
-        setGraphNodes(nodes);
-        setGraphEdges(edges);
+    if (graphMode === "full" || !selectedId) {
+      Promise.all([getGraphNodes(workspace), getGraphEdges(workspace)]).then(
+        ([nodes, edges]) => {
+          setGraphNodes(nodes);
+          setGraphEdges(edges);
+        }
+      );
+      return;
+    }
+    getSessionNeighborhood(workspace, selectedId, 1).then((res) => {
+      if (res) {
+        setGraphNodes(res.nodes);
+        setGraphEdges(res.edges);
+      } else {
+        setGraphNodes([]);
+        setGraphEdges([]);
       }
-    );
-  }, [workspace]);
+    });
+  }, [workspace, graphMode, selectedId]);
 
   // Load subgraph when session is selected
   useEffect(() => {
@@ -179,12 +192,58 @@ export function SplitView({ workspace, initialSessionId }: SplitViewProps) {
       </div>
 
       {/* Right panel: GraphCanvas */}
-      <div style={{ flex: 1, height: "100%", minWidth: 0 }}>
+      <div style={{ flex: 1, height: "100%", minWidth: 0, position: "relative" }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            left: 8,
+            zIndex: 20,
+            display: "flex",
+            gap: 6,
+            backgroundColor: "rgba(15,23,42,0.9)",
+            border: "1px solid #1e293b",
+            borderRadius: 8,
+            padding: "4px",
+          }}
+        >
+          <button
+            onClick={() => setGraphMode("path_neighbors")}
+            style={{
+              border: "1px solid #334155",
+              backgroundColor: graphMode === "path_neighbors" ? "#1d4ed8" : "#0f172a",
+              color: "#e2e8f0",
+              fontSize: 11,
+              padding: "4px 8px",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+            title="Focus on AI path and neighboring nodes"
+          >
+            Path + Neighbors
+          </button>
+          <button
+            onClick={() => setGraphMode("full")}
+            style={{
+              border: "1px solid #334155",
+              backgroundColor: graphMode === "full" ? "#1d4ed8" : "#0f172a",
+              color: "#e2e8f0",
+              fontSize: 11,
+              padding: "4px 8px",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+            title="Render full workspace graph"
+          >
+            Full Graph
+          </button>
+        </div>
         <GraphCanvas
           workspace={workspace}
           nodes={graphNodes}
           edges={graphEdges}
           subgraph={subgraph}
+          graphMode={graphMode}
           activeStep={activeStep}
           onNodeClick={handleNodeClick}
           diffMode={diffMode}

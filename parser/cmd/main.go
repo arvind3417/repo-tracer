@@ -90,14 +90,18 @@ func runSingleRepo(repoPath, workspace, graphName, falkorAddr string, start time
 	fmt.Printf("  Found %d nodes and %d edges (AST)\n", len(result.Nodes), len(result.Edges))
 
 	// Call-graph + IMPLEMENTS analysis.
-	fmt.Println("Analysing call graph...")
-	cga := extractor.NewCallGraphAnalyser(repoPath, workspace)
-	cgEdges, err := cga.Analyse()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: callgraph analysis failed: %v\n", err)
+	if shouldSkipCallgraph() {
+		fmt.Println("Skipping call graph analysis (REPO_TRACER_SKIP_CALLGRAPH=1)")
 	} else {
-		result.Edges = append(result.Edges, cgEdges...)
-		fmt.Printf("  Found %d additional call/implements edges\n", len(cgEdges))
+		fmt.Println("Analysing call graph...")
+		cga := extractor.NewCallGraphAnalyser(repoPath, workspace)
+		cgEdges, err := cga.Analyse()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: callgraph analysis failed: %v\n", err)
+		} else {
+			result.Edges = append(result.Edges, cgEdges...)
+			fmt.Printf("  Found %d additional call/implements edges\n", len(cgEdges))
+		}
 	}
 
 	// Cross-repo detectors — still useful on a single repo for self-contained
@@ -170,17 +174,21 @@ func runMultiRepo(repoPaths []string, workspace, graphName, falkorAddr string, s
 	}
 
 	// Run call-graph analysis on each repo (non-fatal).
-	fmt.Println("\nAnalysing call graphs per repo...")
-	for i, rp := range repoPaths {
-		repoName := wr.Repos[i]
-		fmt.Printf("  [%d/%d] Call graph for %s ...\n", i+1, len(repoPaths), repoName)
-		cga := extractor.NewCallGraphAnalyser(rp, workspace)
-		cgEdges, cgErr := cga.Analyse()
-		if cgErr != nil {
-			fmt.Fprintf(os.Stderr, "    warning: callgraph for %s: %v\n", repoName, cgErr)
-		} else {
-			wr.Edges = append(wr.Edges, cgEdges...)
-			fmt.Printf("    +%d call/implements edges\n", len(cgEdges))
+	if shouldSkipCallgraph() {
+		fmt.Println("\nSkipping call graph analysis (REPO_TRACER_SKIP_CALLGRAPH=1)")
+	} else {
+		fmt.Println("\nAnalysing call graphs per repo...")
+		for i, rp := range repoPaths {
+			repoName := wr.Repos[i]
+			fmt.Printf("  [%d/%d] Call graph for %s ...\n", i+1, len(repoPaths), repoName)
+			cga := extractor.NewCallGraphAnalyser(rp, workspace)
+			cgEdges, cgErr := cga.Analyse()
+			if cgErr != nil {
+				fmt.Fprintf(os.Stderr, "    warning: callgraph for %s: %v\n", repoName, cgErr)
+			} else {
+				wr.Edges = append(wr.Edges, cgEdges...)
+				fmt.Printf("    +%d call/implements edges\n", len(cgEdges))
+			}
 		}
 	}
 
@@ -271,4 +279,8 @@ Single-repo example:
 Multi-repo example:
   repo-tracer parse ./api ./payments-service --workspace razorpay
 `)
+}
+
+func shouldSkipCallgraph() bool {
+	return os.Getenv("REPO_TRACER_SKIP_CALLGRAPH") == "1"
 }

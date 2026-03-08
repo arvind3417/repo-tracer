@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphNode, GraphEdge, SubgraphResult } from "../types";
 
 interface GraphCanvasProps {
@@ -6,6 +6,7 @@ interface GraphCanvasProps {
   nodes: GraphNode[];
   edges: GraphEdge[];
   subgraph: SubgraphResult | null;
+  graphMode?: "full" | "path_neighbors";
   activeStep?: number;
   onNodeClick?: (nodeId: string, step: number) => void;
   // Diff mode props
@@ -50,7 +51,7 @@ const GRAPH_STYLES: any[] = [
   },
   {
     selector: "node[type = 'File']",
-    style: { shape: "round-rectangle", width: 30, height: 20 },
+    style: { shape: "round-rectangle", width: 52, height: 26, "font-size": "10px", "font-weight": 700 },
   },
   {
     selector: "node[type = 'Struct']",
@@ -69,6 +70,16 @@ const GRAPH_STYLES: any[] = [
       "target-arrow-shape": "triangle",
       "curve-style": "bezier",
       opacity: 0.7,
+    },
+  },
+  {
+    selector: "edge.trace-path",
+    style: {
+      width: 4,
+      "line-color": "#f59e0b",
+      "target-arrow-color": "#f59e0b",
+      opacity: 0.95,
+      "z-index": 9999,
     },
   },
   {
@@ -95,6 +106,40 @@ const GRAPH_STYLES: any[] = [
       "background-color": "#1e293b",
       color: "#64748b",
       opacity: 0.7,
+    },
+  },
+  {
+    selector: "node.building",
+    style: {
+      "border-color": "#93c5fd",
+      "border-width": 4,
+      "background-color": "#1e3a8a",
+      width: 82,
+      height: 36,
+      "font-size": 11,
+      "font-weight": 800,
+    },
+  },
+  {
+    selector: "node.flat",
+    style: {
+      shape: "ellipse",
+      width: 30,
+      height: 30,
+      "background-color": "#334155",
+      "border-color": "#94a3b8",
+      "border-width": 2.5,
+    },
+  },
+  {
+    selector: "node.room",
+    style: {
+      shape: "triangle",
+      width: 22,
+      height: 22,
+      "background-color": "#0ea5e9",
+      "border-color": "#7dd3fc",
+      "border-width": 2,
     },
   },
   {
@@ -133,6 +178,7 @@ export function GraphCanvas({
   nodes,
   edges,
   subgraph,
+  graphMode = "full",
   activeStep,
   onNodeClick,
   diffMode,
@@ -143,6 +189,8 @@ export function GraphCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cyRef = useRef<any | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [renderStatus, setRenderStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
   // Build element definitions from nodes + edges
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -159,22 +207,60 @@ export function GraphCanvas({
         if (r.is_root_cause) rootCauseIds.add(r.node_id);
       }
     }
+    const visitedIds = new Set(visitedByStep.keys());
 
-    // Compound parents per repo
-    const repos = new Set<string>();
-    for (const n of nodes) {
-      if (n.repo) repos.add(n.repo);
+    let renderNodes = nodes;
+    let renderEdges = edges;
+    if (graphMode === "path_neighbors" && visitedIds.size > 0) {
+      const keep = new Set<string>(visitedIds);
+      for (const e of edges) {
+        if (visitedIds.has(e.source) || visitedIds.has(e.target)) {
+          keep.add(e.source);
+          keep.add(e.target);
+        }
+      }
+      renderNodes = nodes.filter((n) => keep.has(n.id));
+      renderEdges = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+      // Metaphor mode: prioritize Building/Flat/Room; drop package noise.
+      const keepTypes = new Set(["File", "Function", "Method"]);
+      const keptIds = new Set(renderNodes.filter((n) => keepTypes.has(n.type)).map((n) => n.id));
+      renderNodes = renderNodes.filter((n) => keptIds.has(n.id));
+      renderEdges = renderEdges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
     }
-    for (const repo of repos) {
-      elements.push({
-        data: { id: `__repo__${repo}`, label: repo, type: "repo" },
-        classes: "repo-cluster",
-      });
+    const isLargeGraph = renderNodes.length > 4000 || renderEdges.length > 8000;
+
+    // Compound parents per repo are expensive for huge graphs; skip in large mode.
+    if (!isLargeGraph) {
+      const repos = new Set<string>();
+      for (const n of renderNodes) {
+        if (n.repo) repos.add(n.repo);
+      }
+      for (const repo of repos) {
+        elements.push({
+          data: { id: `__repo__${repo}`, label: repo, type: "repo" },
+          classes: "repo-cluster",
+        });
+      }
     }
+
+    const basename = (p?: string) => {
+      if (!p) return "";
+      const parts = p.split("/");
+      return parts[parts.length - 1] || p;
+    };
 
     // Regular nodes
-    for (const n of nodes) {
+    for (let i = 0; i < renderNodes.length; i++) {
+      const n = renderNodes[i];
       const classes: string[] = [];
+      const functionKind = String(n.function_kind ?? "");
+      if (n.type === "File") {
+        classes.push("building");
+      } else if ((n.type === "Function" || n.type === "Method") && functionKind === "nested") {
+        classes.push("room");
+      } else if (n.type === "Function" || n.type === "Method") {
+        classes.push("flat");
+      }
       const step = visitedByStep.get(n.id);
       if (step !== undefined) classes.push("visited");
       if (rootCauseIds.has(n.id)) classes.push("root-cause");
@@ -195,16 +281,35 @@ export function GraphCanvas({
         }
       }
 
+      let label = n.name || basename(n.file) || n.label || n.id;
+      if (n.type === "File") {
+        label = `BLDG ${basename(n.file || n.label || n.id)}`;
+      } else if (n.type === "Function" || n.type === "Method") {
+        const fn = (n.name || n.label || "").replace(/^.*\./, "");
+        if (functionKind === "nested") {
+          label = `ROOM ${fn || label}`;
+        } else {
+          label = `FLAT ${fn || label}`;
+        }
+      }
+      const showLabel = !isLargeGraph || step !== undefined;
+
+      // Deterministic positions for large graphs so first render is visible and fast.
+      const cols = Math.max(1, Math.floor(Math.sqrt(renderNodes.length)));
+      const x = (i % cols) * 28;
+      const y = Math.floor(i / cols) * 22;
+
       elements.push({
+        position: isLargeGraph ? { x, y } : undefined,
         data: {
           id: n.id,
-          label: n.name || n.label || n.id,
+          label: showLabel ? label : "",
           color: nodeColour,
           type: n.type,
           repo: n.repo,
           file: n.file,
           line: n.line,
-          parent: n.repo ? `__repo__${n.repo}` : undefined,
+          parent: !isLargeGraph && n.repo ? `__repo__${n.repo}` : undefined,
           visitedAtStep: step ?? null,
         },
         classes: classes.join(" "),
@@ -238,10 +343,10 @@ export function GraphCanvas({
 
     // Edges
     const nodeIds = new Set(elements.map((e) => e.data.id));
-    for (const e of edges) {
+    for (const e of renderEdges) {
       if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-      const srcNode = nodes.find((n) => n.id === e.source);
-      const dstNode = nodes.find((n) => n.id === e.target);
+      const srcNode = renderNodes.find((n) => n.id === e.source);
+      const dstNode = renderNodes.find((n) => n.id === e.target);
       const isCrossRepo = srcNode && dstNode && srcNode.repo !== dstNode.repo;
       elements.push({
         data: {
@@ -254,6 +359,33 @@ export function GraphCanvas({
       });
     }
 
+    // Add explicit AI path edges between consecutive visited steps, even if
+    // the graph has no direct edge between those nodes.
+    if (subgraph) {
+      const stepMap = new Map<number, string>();
+      for (const r of subgraph.resolved) {
+        if (r.node_id) stepMap.set(r.visited_at_step, r.node_id);
+      }
+      for (const g of subgraph.ghosts) {
+        stepMap.set(g.visited_at_step, `__ghost__${g.visited_at_step}`);
+      }
+      const ordered = Array.from(stepMap.entries()).sort((a, b) => a[0] - b[0]);
+      for (let i = 0; i < ordered.length - 1; i++) {
+        const [s1, n1] = ordered[i];
+        const [s2, n2] = ordered[i + 1];
+        if (!nodeIds.has(n1) || !nodeIds.has(n2)) continue;
+        elements.push({
+          data: {
+            id: `__trace__${s1}_${s2}`,
+            source: n1,
+            target: n2,
+            type: "TRACE_PATH",
+          },
+          classes: "trace-path",
+        });
+      }
+    }
+
     return elements;
   }
 
@@ -263,26 +395,47 @@ export function GraphCanvas({
 
     const elements = buildElements();
     let cancelled = false;
+    setRenderStatus("loading");
 
-    // Dynamic import — won't fail at build time if package isn't installed.
-    // Use Function constructor to avoid TypeScript static analysis of the import path.
-    const dynamicImport = new Function("specifier", "return import(specifier)");
-    dynamicImport("cytoscape")
+    import("cytoscape")
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then((mod: any) => {
+        setLoadError(null);
         if (cancelled || !containerRef.current) return;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cytoscape = (mod as any).default ?? mod;
+
+        const visitedIds = new Set((subgraph?.resolved ?? []).map((r) => r.node_id));
+        let renderNodeCount = nodes.length;
+        let renderEdgeCount = edges.length;
+        if (graphMode === "path_neighbors" && visitedIds.size > 0) {
+          const keep = new Set<string>(visitedIds);
+          for (const e of edges) {
+            if (visitedIds.has(e.source) || visitedIds.has(e.target)) {
+              keep.add(e.source);
+              keep.add(e.target);
+            }
+          }
+          renderNodeCount = nodes.filter((n) => keep.has(n.id)).length;
+          renderEdgeCount = edges.filter((e) => keep.has(e.source) && keep.has(e.target)).length;
+        }
+        const isLargeGraph = renderNodeCount > 4000 || renderEdgeCount > 8000;
+        const layout = isLargeGraph
+          ? { name: "preset", fit: true, padding: 20 }
+          : { name: "cose" };
 
         if (!cyRef.current) {
           cyRef.current = cytoscape({
             container: containerRef.current,
             elements,
             style: GRAPH_STYLES,
-            layout: { name: "cose" },
+            layout,
             userZoomingEnabled: true,
             userPanningEnabled: true,
             boxSelectionEnabled: false,
+            pixelRatio: 1,
+            hideEdgesOnViewport: isLargeGraph,
+            textureOnViewport: isLargeGraph,
           });
 
           cyRef.current.on("tap", "node", (evt: { target: { id: () => string; data: (k: string) => number | null } }) => {
@@ -296,18 +449,21 @@ export function GraphCanvas({
         } else {
           cyRef.current.elements().remove();
           cyRef.current.add(elements);
-          cyRef.current.layout({ name: "cose" }).run();
+          cyRef.current.layout(layout).run();
         }
+        setRenderStatus("ready");
       })
-      .catch(() => {
-        // Cytoscape not available — graph canvas will show the placeholder
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLoadError(`Failed to load graph engine: ${msg}`);
+        setRenderStatus("error");
       });
 
     return () => {
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, subgraph]);
+  }, [nodes, edges, subgraph, graphMode]);
 
   // Active step highlight + pan
   useEffect(() => {
@@ -335,6 +491,20 @@ export function GraphCanvas({
   }, []);
 
   const isEmpty = nodes.length === 0;
+  const showFallback = !isEmpty && renderStatus !== "ready";
+  const fallbackDots = useMemo(() => {
+    const cap = Math.min(nodes.length, 1200);
+    const dots: Array<{ left: number; top: number; color: string }> = [];
+    for (let i = 0; i < cap; i++) {
+      const n = nodes[i];
+      dots.push({
+        left: ((i * 37) % 1000) / 10,
+        top: ((i * 53) % 1000) / 10,
+        color: getNodeColour(n.type),
+      });
+    }
+    return dots;
+  }, [nodes]);
 
   return (
     <div
@@ -367,9 +537,58 @@ export function GraphCanvas({
           <span style={{ fontSize: 11 }}>Select a workspace to load the graph</span>
         </div>
       )}
+      {!isEmpty && loadError && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            color: "#fca5a5",
+            fontSize: 13,
+            zIndex: 2,
+            pointerEvents: "none",
+          }}
+        >
+          <span style={{ fontSize: 28 }}>&#9888;</span>
+          <span>Graph failed to render</span>
+          <span style={{ fontSize: 11 }}>{loadError}</span>
+        </div>
+      )}
+      {showFallback && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 20% 20%, rgba(59,130,246,0.14), transparent 40%), radial-gradient(circle at 80% 70%, rgba(245,158,11,0.12), transparent 35%)",
+            zIndex: 1,
+            overflow: "hidden",
+          }}
+        >
+          {fallbackDots.map((d, idx) => (
+            <span
+              key={idx}
+              style={{
+                position: "absolute",
+                left: `${d.left}%`,
+                top: `${d.top}%`,
+                width: 3,
+                height: 3,
+                borderRadius: "50%",
+                backgroundColor: d.color,
+                opacity: 0.8,
+              }}
+            />
+          ))}
+        </div>
+      )}
       <div
         ref={containerRef}
-        style={{ width: "100%", height: "100%", display: isEmpty ? "none" : "block" }}
+        style={{ width: "100%", height: "100%", display: isEmpty ? "none" : "block", zIndex: 2, position: "relative" }}
       />
       {/* Legend */}
       <div
@@ -454,6 +673,22 @@ export function GraphCanvas({
           workspace: {workspace}
         </div>
       )}
+      <div
+        style={{
+          position: "absolute",
+          top: 10,
+          right: 12,
+          fontSize: 10,
+          color: "#94a3b8",
+          backgroundColor: "rgba(2,6,23,0.72)",
+          border: "1px solid #1e293b",
+          borderRadius: 6,
+          padding: "4px 8px",
+          zIndex: 12,
+        }}
+      >
+        nodes {nodes.length} | edges {edges.length} | status {renderStatus}
+      </div>
     </div>
   );
 }

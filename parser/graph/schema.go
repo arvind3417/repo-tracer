@@ -20,6 +20,7 @@ const (
 	EdgeImplements = "IMPLEMENTS"
 	EdgeDefinedIn  = "DEFINED_IN"
 	EdgeBelongsTo  = "BELONGS_TO"
+	EdgeContains   = "CONTAINS"
 
 	// Cross-repo edge types.
 	EdgeDependsOn     = "DEPENDS_ON"      // Repo -> Repo (from go.mod)
@@ -181,26 +182,35 @@ func (p PackageNode) ToNode() Node {
 
 // FunctionNode holds data for a Function node.
 type FunctionNode struct {
-	Name      string
-	FilePath  string
-	LineStart int
-	LineEnd   int
-	Signature string
-	Repo      string
-	Workspace string
+	Name              string
+	QualifiedName     string
+	FunctionKey       string
+	ParentFunctionKey string
+	Kind              string // top_level|nested|closure
+	FilePath          string
+	LineStart         int
+	LineEnd           int
+	Signature         string
+	Repo              string
+	Workspace         string
 }
 
 func (f FunctionNode) ToNode() Node {
 	return Node{
 		Label: NodeTypeFunction,
 		Properties: map[string]interface{}{
-			"name":       f.Name,
-			"file_path":  f.FilePath,
-			"line_start": f.LineStart,
-			"line_end":   f.LineEnd,
-			"signature":  f.Signature,
-			"repo":       f.Repo,
-			"workspace":  f.Workspace,
+			"name":                f.Name,
+			"qualified_name":      f.QualifiedName,
+			"function_key":        f.FunctionKey,
+			"parent_function_key": f.ParentFunctionKey,
+			"function_kind":       f.Kind,
+			"file":                f.FilePath,
+			"file_path":           f.FilePath,
+			"line_start":          f.LineStart,
+			"line_end":            f.LineEnd,
+			"signature":           f.Signature,
+			"repo":                f.Repo,
+			"workspace":           f.Workspace,
 		},
 	}
 }
@@ -208,6 +218,7 @@ func (f FunctionNode) ToNode() Node {
 // MethodNode holds data for a Method node.
 type MethodNode struct {
 	Name         string
+	MethodKey    string
 	ReceiverType string
 	FilePath     string
 	LineStart    int
@@ -222,7 +233,9 @@ func (m MethodNode) ToNode() Node {
 		Label: NodeTypeMethod,
 		Properties: map[string]interface{}{
 			"name":          m.Name,
+			"method_key":    m.MethodKey,
 			"receiver_type": m.ReceiverType,
+			"file":          m.FilePath,
 			"file_path":     m.FilePath,
 			"line_start":    m.LineStart,
 			"line_end":      m.LineEnd,

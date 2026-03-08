@@ -1,3 +1,5 @@
+import base64
+import os
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -7,14 +9,47 @@ from typing import Dict, Optional
 from .models import TraceStep
 
 
-def setup_phoenix(endpoint: str = "http://localhost:4318/v1/traces") -> trace.Tracer:
-    """Configure OpenTelemetry to export traces to Phoenix and return a tracer."""
+def _normalize_langfuse_host(host: str) -> str:
+    base = host.rstrip("/")
+    if base.endswith("/api/public/otel"):
+        return f"{base}/v1/traces"
+    if base.endswith("/api/public/otel/v1/traces"):
+        return base
+    return f"{base}/api/public/otel/v1/traces"
+
+
+def _langfuse_headers(public_key: str, secret_key: str) -> Dict[str, str]:
+    token = base64.b64encode(f"{public_key}:{secret_key}".encode("utf-8")).decode("utf-8")
+    return {"Authorization": f"Basic {token}"}
+
+
+def setup_phoenix(
+    endpoint: str = "http://localhost:4318/v1/traces",
+    headers: Optional[Dict[str, str]] = None,
+) -> trace.Tracer:
+    """Configure OpenTelemetry to export traces to an OTLP HTTP endpoint and return a tracer."""
     provider = TracerProvider()
-    exporter = OTLPSpanExporter(endpoint=endpoint)
+    exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     AnthropicInstrumentor().instrument()
     return trace.get_tracer("repo-tracer")
+
+
+def setup_langfuse(
+    host: Optional[str] = None,
+    public_key: Optional[str] = None,
+    secret_key: Optional[str] = None,
+) -> trace.Tracer:
+    """Configure OpenTelemetry exporter for Langfuse OTLP ingestion."""
+    lf_host = host or os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    lf_public_key = public_key or os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+    lf_secret_key = secret_key or os.environ.get("LANGFUSE_SECRET_KEY", "")
+    if not lf_public_key or not lf_secret_key:
+        raise ValueError("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required for Langfuse sink")
+    endpoint = _normalize_langfuse_host(lf_host)
+    headers = _langfuse_headers(lf_public_key, lf_secret_key)
+    return setup_phoenix(endpoint=endpoint, headers=headers)
 
 
 class PhoenixSink:

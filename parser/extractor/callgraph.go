@@ -35,7 +35,15 @@ func NewCallGraphAnalyser(repoPath, workspace string) *CallGraphAnalyser {
 
 // Analyse loads packages from repoPath, builds an SSA program, runs RTA, and
 // returns CALLS and IMPLEMENTS edges suitable for appending to a Result.
-func (a *CallGraphAnalyser) Analyse() ([]graph.Edge, error) {
+func (a *CallGraphAnalyser) Analyse() (edgesOut []graph.Edge, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Let caller continue with AST-derived graph even if x/tools panics.
+			err = fmt.Errorf("callgraph panic: %v", r)
+			edgesOut = nil
+		}
+	}()
+
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
@@ -117,11 +125,28 @@ func (a *CallGraphAnalyser) Analyse() ([]graph.Edge, error) {
 
 		callerName := funcName(caller)
 		calleeName := funcName(callee)
+		callerKey := functionKey(callerName, callerFile, callerPos.Line, callerPos.Column)
+		calleeKey := functionKey(calleeName, calleeFile, calleePos.Line, calleePos.Column)
 
 		if callerName == "" || calleeName == "" {
 			return nil
 		}
 
+		// Primary edge: key-based identity (reduces same-name collisions across files).
+		edges = append(edges, graph.Edge{
+			FromLabel: graph.NodeTypeFunction,
+			FromKey:   "function_key",
+			FromValue: callerKey,
+			ToLabel:   graph.NodeTypeFunction,
+			ToKey:     "function_key",
+			ToValue:   calleeKey,
+			Relation:  graph.EdgeCalls,
+			Properties: map[string]interface{}{
+				"caller_file": callerFile,
+				"callee_file": calleeFile,
+			},
+		})
+		// Fallback edge: name-based identity for backwards compatibility / unresolved keys.
 		edges = append(edges, graph.Edge{
 			FromLabel: graph.NodeTypeFunction,
 			FromKey:   "name",
@@ -224,6 +249,19 @@ func funcName(fn *ssa.Function) string {
 		if len(parts) > 0 {
 			name = parts[len(parts)-1] + "." + name
 		}
+	}
+	return name
+}
+
+func functionKey(name, file string, line, col int) string {
+	return fmt.Sprintf("%s:%s:%d:%d", file, normalizeFuncNameForKey(name), line, col)
+}
+
+func normalizeFuncNameForKey(name string) string {
+	// Extractor function_key uses the function identifier (without package prefix).
+	// SSA names often come as "pkg.Func" — normalize for key-based joins.
+	if i := strings.LastIndex(name, "."); i >= 0 && i < len(name)-1 {
+		return name[i+1:]
 	}
 	return name
 }

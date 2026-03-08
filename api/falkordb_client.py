@@ -142,6 +142,31 @@ class FalkorDBClient:
         if val is None or isinstance(val, (str, int, float, bool)):
             return val
         if isinstance(val, (list, tuple)):
+            # Edge from FalkorDB can arrive as key-value tuples:
+            # [["id", 1], ["type", "IMPORTS"], ["src_node", 2], ["dest_node", 3], ["properties", []]]
+            if val and all(
+                isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str)
+                for item in val
+            ):
+                kv = {k: self._decode_plain_value(v) for k, v in val}
+                if {"id", "type", "src_node", "dest_node"}.issubset(kv.keys()):
+                    props = kv.get("properties", {})
+                    if isinstance(props, list):
+                        # properties can be [] or [["k","v"], ...]
+                        try:
+                            props = {p[0]: self._decode_plain_value(p[1]) for p in props if isinstance(p, (list, tuple)) and len(p) == 2}
+                        except Exception:
+                            props = {}
+                    if not isinstance(props, dict):
+                        props = {}
+                    return {
+                        "id": kv["id"],
+                        "type": kv["type"],
+                        "source": kv["src_node"],
+                        "target": kv["dest_node"],
+                        **props,
+                    }
+                return kv
             # Could be a node: [id, [labels], {props}] or just a list value
             if (len(val) == 3
                     and isinstance(val[0], int)

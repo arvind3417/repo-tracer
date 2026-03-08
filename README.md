@@ -2,7 +2,7 @@
 
 > Make AI codebase navigation transparent and replayable.
 
-repo-tracer captures every tool call Claude makes when exploring a Go repository, records the structured reasoning behind each step, and emits the full trace to [Arize Phoenix](https://phoenix.arize.com/) via OpenTelemetry.
+repo-tracer captures every tool call Claude makes when exploring a Go repository, records the structured reasoning behind each step, and emits the full trace to an OpenTelemetry sink ([Arize Phoenix](https://phoenix.arize.com/) or Langfuse).
 
 ## Architecture
 
@@ -53,8 +53,22 @@ Options:
 |------|---------|-------------|
 | `--repo` | (required) | Path to the Go repository to analyse |
 | `--phoenix` | `http://localhost:4318/v1/traces` | OTLP HTTP endpoint |
+| `--sink` | `phoenix` | Sink backend: `phoenix` or `langfuse` |
+| `--langfuse-host` | `https://cloud.langfuse.com` | Langfuse host when `--sink langfuse` |
 
 Each run saves a JSON session file to `./traces/<session-id>.json`.
+
+### Langfuse Setup
+
+```bash
+export LANGFUSE_PUBLIC_KEY=pk-lf-...
+export LANGFUSE_SECRET_KEY=sk-lf-...
+export LANGFUSE_HOST=https://cloud.langfuse.com
+
+python -m tracer.cli trace "why does X happen?" \
+  --repo ./path/to/go/repo \
+  --sink langfuse
+```
 
 ## Trace Events
 

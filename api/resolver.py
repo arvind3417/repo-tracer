@@ -134,8 +134,8 @@ class NodeResolver:
         # Fetch each node type separately with known properties
         label_queries = [
             ("File",      "MATCH (n:File)      RETURN id(n) AS _id, 'File'      AS _label, n.path AS path, n.name AS name, n.repo AS repo, n.workspace AS workspace, n.line_count AS line_count"),
-            ("Function",  "MATCH (n:Function)  RETURN id(n) AS _id, 'Function'  AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.line_end AS line_end, n.signature AS signature"),
-            ("Method",    "MATCH (n:Method)    RETURN id(n) AS _id, 'Method'    AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.receiver AS receiver"),
+            ("Function",  "MATCH (n:Function)  RETURN id(n) AS _id, 'Function'  AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.line_end AS line_end, n.signature AS signature, n.function_kind AS function_kind, n.parent_function_key AS parent_function_key, n.function_key AS function_key"),
+            ("Method",    "MATCH (n:Method)    RETURN id(n) AS _id, 'Method'    AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line_start AS line_start, n.receiver_type AS receiver_type, n.method_key AS method_key"),
             ("Struct",    "MATCH (n:Struct)    RETURN id(n) AS _id, 'Struct'    AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line AS line"),
             ("Interface", "MATCH (n:Interface) RETURN id(n) AS _id, 'Interface' AS _label, n.name AS name, n.file AS file, n.repo AS repo, n.line AS line"),
             ("Package",   "MATCH (n:Package)   RETURN id(n) AS _id, 'Package'   AS _label, n.name AS name, n.import_path AS import_path, n.repo AS repo"),
@@ -304,6 +304,7 @@ class NodeResolver:
         """Find a Function/Method node whose start_line == line (or close to it)."""
         nodes = self._all_nodes()
         tail = _path_tail(file_path)
+        candidates: list[dict] = []
 
         for n in nodes:
             labels = n.get("labels", [])
@@ -312,10 +313,12 @@ class NodeResolver:
             node_file = _normalise_path(str(n.get("file", "")))
             if not self._path_matches(node_file, file_path, tail):
                 continue
-            start = n.get("start_line", n.get("line", None))
+            start = n.get("line_start", n.get("start_line", n.get("line", None)))
             if start is not None and abs(int(start) - line) <= 5:
-                return n
-        return None
+                candidates.append(n)
+        if not candidates:
+            return None
+        return min(candidates, key=lambda n: self._function_rank(n, line))
 
     def _find_function_containing_line(self, file_path: str, line: int) -> dict | None:
         """Find a Function/Method whose line range contains the given line."""
@@ -330,8 +333,8 @@ class NodeResolver:
             node_file = _normalise_path(str(n.get("file", "")))
             if not self._path_matches(node_file, file_path, tail):
                 continue
-            start = n.get("start_line", n.get("line", None))
-            end = n.get("end_line", None)
+            start = n.get("line_start", n.get("start_line", n.get("line", None)))
+            end = n.get("line_end", n.get("end_line", None))
             if start is None:
                 continue
             start = int(start)
@@ -346,8 +349,23 @@ class NodeResolver:
 
         if not candidates:
             return None
-        # Return the function with the highest start_line (most specific)
-        return max(candidates, key=lambda n: int(n.get("start_line", n.get("line", 0)) or 0))
+        # Prefer nested functions when line overlaps, then nearest/narrowest range.
+        return min(candidates, key=lambda n: self._function_rank(n, line))
+
+    @staticmethod
+    def _function_rank(n: dict, line: int) -> tuple[int, int, int]:
+        """Lower rank is better: nested > top-level, nearest start line, narrowest span."""
+        kind = str(n.get("function_kind", ""))
+        is_nested = 0 if kind == "nested" else 1
+        start = int(n.get("line_start", n.get("start_line", n.get("line", 0))) or 0)
+        end = n.get("line_end", n.get("end_line", None))
+        try:
+            end_i = int(end) if end is not None else start
+        except (TypeError, ValueError):
+            end_i = start
+        span = max(1, end_i - start)
+        dist = abs(start - line)
+        return (is_nested, dist, span)
 
     def _find_file_node(self, file_path: str) -> dict | None:
         """Find a File node matching the given path."""
@@ -409,14 +427,14 @@ class NodeResolver:
         labels = node.get("labels", [])
         node_type = labels[0] if labels else "Unknown"
         file_val = node.get("file", node.get("path", node.get("name", "")))
-        line_val = node.get("start_line", node.get("line", None))
+        line_val = node.get("line_start", node.get("start_line", node.get("line", None)))
         if line_val is not None:
             try:
                 line_val = int(line_val)
             except (TypeError, ValueError):
                 line_val = None
         return ResolvedNode(
-            node_id=str(node.get("id", "")),
+            node_id=str(node.get("_id", node.get("id", ""))),
             node_type=node_type,
             name=str(node.get("name", "")),
             file=str(file_val),
@@ -469,4 +487,20 @@ class NodeResolver:
             dst = str(edge.get("target", ""))
             if src in resolved_ids and dst in resolved_ids:
                 result.append(edge)
+        # Add explicit traversal edges between consecutive resolved steps so the
+        # UI can always visualize the replay path, even without direct graph edges.
+        ordered = sorted(resolved, key=lambda r: r.visited_at_step)
+        for i in range(len(ordered) - 1):
+            a = ordered[i]
+            b = ordered[i + 1]
+            if not a.node_id or not b.node_id:
+                continue
+            result.append(
+                {
+                    "id": f"trace:{a.visited_at_step}->{b.visited_at_step}",
+                    "source": str(a.node_id),
+                    "target": str(b.node_id),
+                    "type": "TRACE_PATH",
+                }
+            )
         return result

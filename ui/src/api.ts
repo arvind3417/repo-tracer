@@ -11,7 +11,8 @@ import type {
   StatsResponse,
 } from "./types";
 
-const BASE = "http://localhost:8000/api";
+const API_HOST = typeof window !== "undefined" ? window.location.hostname : "localhost";
+const BASE = `http://${API_HOST}:8000/api`;
 
 // --- Trace endpoints ---
 
@@ -89,6 +90,26 @@ export async function getSubgraph(
     );
     if (!res.ok) return null;
     return res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function getSessionNeighborhood(
+  workspace: string,
+  sessionId: string,
+  hops = 1
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] } | null> {
+  try {
+    const res = await fetch(
+      `${BASE}/graph/${encodeURIComponent(workspace)}/session-neighborhood?session_id=${encodeURIComponent(sessionId)}&hops=${hops}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      nodes: data.nodes ?? [],
+      edges: data.edges ?? [],
+    };
   } catch {
     return null;
   }
